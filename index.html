@@ -69,7 +69,7 @@ body.dropping canvas { outline: 2px dashed rgba(255,255,255,.5); outline-offset:
 
 /* ---------- panel ---------- */
 #panel {
-  position: fixed; top: 16px; right: 16px; z-index: 10; width: 300px; max-height: calc(100vh - 32px);
+  position: fixed; top: 16px; right: 16px; z-index: 10; width: var(--panel-w, 300px); max-height: calc(100vh - 32px);
   display: flex; flex-direction: column; background: var(--panel-bg); color: var(--panel-fg);
   border: 1px solid var(--panel-line); border-radius: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.10);
   font-size: 13px; line-height: 1.4;
@@ -96,6 +96,19 @@ body.dropping canvas { outline: 2px dashed rgba(255,255,255,.5); outline-offset:
 #showTab svg { width: 15px; height: 15px; display: block; flex: none; }
 #showTab:hover { background: #f0f0f1; }
 #panel.collapsed ~ #showTab { transform: none; opacity: 1; pointer-events: auto; transition-delay: .1s; }
+/* while the panel is hidden, "Smooth sand" waits as an icon button beside the show pill */
+#smoothBtn {
+  position: fixed; top: 16px; right: 128px; z-index: 11; width: 32px; height: 32px; padding: 0;
+  display: grid; place-items: center; border: 1px solid var(--panel-line); border-radius: 10px;
+  background: var(--panel-bg); color: var(--panel-fg); cursor: var(--cur); box-shadow: 0 8px 30px rgba(0,0,0,.10);
+  transform: translateX(8px) scale(.9); opacity: 0; pointer-events: none;
+  transition: transform .28s cubic-bezier(.2,.8,.2,1), opacity .2s, background .12s;
+}
+#smoothBtn svg { width: 15px; height: 15px; display: block; }
+#smoothBtn:hover { background: #f0f0f1; }
+#smoothBtn:focus-visible { outline: 2px solid #101011; outline-offset: 1px; }
+#panel.collapsed ~ #smoothBtn { transform: none; opacity: 1; pointer-events: auto; transition-delay: .14s; }
+#panel.collapsed ~ #smoothBtn:active { transform: scale(.98); transition-delay: 0s; }
 
 #panel .body { overflow-y: auto; overflow-x: hidden; padding: 4px 14px 14px; scrollbar-width: thin; scrollbar-color: #c3c3c6 transparent; }
 .cat { margin-top: 2px; }
@@ -189,10 +202,23 @@ html.scrubbing, html.scrubbing * { cursor: var(--scrub-cursor) !important; user-
 .buttons button.secondary { border: 1px solid #ededee; background: #fcfcfd; color: #101011; box-shadow: inset 0 -2px 1px rgba(0,0,0,.05); }
 .buttons button.secondary:hover { background: #f7f7f8; }
 
+/* left-edge grabber for resizing the panel's width */
+#resizer { position: absolute; left: -6px; top: 12px; bottom: 12px; width: 12px; cursor: var(--scrub-cursor); z-index: 5; touch-action: none; }
+#resizer::after {
+  content: ""; position: absolute; left: 4px; top: 50%; width: 4px; height: 36px; margin-top: -18px;
+  border-radius: 2px; background: #dddddf; opacity: 0; transition: opacity .12s, background .12s;
+}
+#panel:hover #resizer::after { opacity: 1; }
+#resizer:hover::after, #panel.resizing #resizer::after { background: #8e8e95; opacity: 1; }
+html.panel-resizing, html.panel-resizing * { cursor: var(--scrub-cursor) !important; user-select: none !important; }
+#panel.resizing { transition: none; }
+
 @media (max-width: 520px) {
+  #resizer { display: none; }
   #panel { top: auto; bottom: 8px; left: 8px; right: 8px; width: auto; max-height: 50vh; }
   #panel.collapsed { transform: translateY(calc(100% + 16px)); }
   #showTab { top: auto; bottom: 8px; right: 8px; }
+  #smoothBtn { top: auto; bottom: 8px; right: 120px; }
   #hint { bottom: auto; top: 20px; }
 }
 </style>
@@ -221,6 +247,9 @@ html.scrubbing, html.scrubbing * { cursor: var(--scrub-cursor) !important; user-
 <button id="showTab" type="button" aria-label="Show panel">
   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
   <span>Show panel</span>
+</button>
+<button id="smoothBtn" type="button" data-tip="Smooth sand" aria-label="Smooth sand">
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5.5c1.2-1.4 2.3-1.4 3.5 0s2.3 1.4 3.5 0 2.3-1.4 3.5 0"/><path d="M2.5 9.5h11M2.5 12.5h11"/></svg>
 </button>
 <input id="fileInput" type="file" accept="audio/*" hidden>
 
@@ -299,7 +328,7 @@ const F_MIN = 30, F_MAX = 8000;    // Hz, the part of the spectrum the floor lis
 const STORE = "sandSoundSettings", STORE_UI = "sandSoundPanelUI";
 let S = { ...DEFAULTS };
 try { const j = JSON.parse(localStorage.getItem(STORE)); if (j && j._v === DEFAULTS._v) Object.assign(S, j); } catch (e) {}
-let UI = { hidden: false, closed: {} };
+let UI = { hidden: false, closed: {}, w: 300 };
 try { Object.assign(UI, JSON.parse(localStorage.getItem(STORE_UI)) || {}); } catch (e) {}
 const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {} };
 const saveUI = () => { try { localStorage.setItem(STORE_UI, JSON.stringify(UI)); } catch (e) {} };
@@ -1229,6 +1258,44 @@ function buildPanel() {
   row.append(sc, ra); panelBody.appendChild(row);
 }
 
+/* Drag the panel's left edge to resize it. Double-click the edge to reset the width. */
+const MIN_W = 260, DEFAULT_W = 300;
+const maxW = () => Math.max(MIN_W, Math.min(640, innerWidth - 32));
+const setPanelW = w => {
+  UI.w = Math.round(Math.min(maxW(), Math.max(MIN_W, w)));
+  panel.style.setProperty("--panel-w", UI.w + "px");
+};
+const resizer = document.createElement("div");
+resizer.id = "resizer"; resizer.dataset.tip = "Drag to resize, double-click to reset";
+resizer.setAttribute("role", "separator"); resizer.setAttribute("aria-orientation", "vertical");
+panel.appendChild(resizer);
+let rz = null;
+resizer.addEventListener("pointerdown", e => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  rz = { x: e.clientX, w: panel.getBoundingClientRect().width, id: e.pointerId };
+  resizer.setPointerCapture(e.pointerId);
+  panel.classList.add("resizing");
+  document.documentElement.classList.add("panel-resizing");
+});
+resizer.addEventListener("pointermove", e => {
+  if (!rz || e.pointerId !== rz.id) return;
+  setPanelW(rz.w + (rz.x - e.clientX));            // the panel hangs off the right edge, so dragging left widens it
+});
+const endResize = e => {
+  if (!rz || (e && e.pointerId !== rz.id)) return;
+  rz = null;
+  panel.classList.remove("resizing");
+  document.documentElement.classList.remove("panel-resizing");
+  saveUI();
+};
+resizer.addEventListener("pointerup", endResize);
+resizer.addEventListener("pointercancel", endResize);
+resizer.addEventListener("lostpointercapture", endResize);
+resizer.addEventListener("dblclick", () => { setPanelW(DEFAULT_W); saveUI(); });
+window.addEventListener("resize", () => setPanelW(UI.w));   // keep it inside the window
+setPanelW(UI.w || DEFAULT_W);
+
 function togglePanel(hide) {
   UI.hidden = hide === undefined ? !panel.classList.contains("collapsed") : hide;
   panel.classList.toggle("collapsed", UI.hidden);
@@ -1236,6 +1303,7 @@ function togglePanel(hide) {
 }
 document.getElementById("hideBtn").addEventListener("click", () => togglePanel(true));
 document.getElementById("showTab").addEventListener("click", () => togglePanel(false));
+document.getElementById("smoothBtn").addEventListener("click", () => shakeSmooth());
 
 /* ---------- keys, files ---------- */
 window.addEventListener("contextmenu", e => e.preventDefault());   // no right-click menu anywhere on the page
