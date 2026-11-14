@@ -43,12 +43,21 @@ canvas { position: fixed; left: 0; top: 0; display: block; width: 100%; height: 
 
 /* ---------- hint ---------- */
 #hint {
-  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 5; pointer-events: none;
-  padding: 8px 12px; border-radius: 10px; background: rgba(16,16,17,.78); color: #f7f7f8;
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 5;
+  display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-radius: 10px;
+  background: rgba(16,16,17,.78); color: #f7f7f8;
   font: 400 12px/1 "Geist Mono", ui-monospace, monospace; letter-spacing: -.03em; white-space: nowrap;
-  transition: opacity .4s;
+  transition: opacity .4s, visibility 0s;
 }
-#hint.gone { opacity: 0; }
+#hint.gone { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .4s, visibility 0s .4s; }
+#hintClose {
+  display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: #a8a8ad; cursor: var(--cur); transition: background .12s, color .12s, transform .06s;
+}
+#hintClose svg { width: 12px; height: 12px; display: block; }
+#hintClose:hover { background: rgba(255,255,255,.12); color: #f7f7f8; }
+#hintClose:active { transform: scale(.98); }
+#hintClose:focus-visible { outline: 2px solid #f7f7f8; outline-offset: 1px; }
 body.dropping canvas { outline: 2px dashed rgba(255,255,255,.5); outline-offset: -12px; }
 
 /* ---------- tooltip: a dark pill with the label and one keycap per key (script: Tooltip) ---------- */
@@ -201,6 +210,14 @@ html.scrubbing, html.scrubbing * { cursor: var(--scrub-cursor) !important; user-
 .buttons button.primary:hover { filter: brightness(1.18); }
 .buttons button.secondary { border: 1px solid #ededee; background: #fcfcfd; color: #101011; box-shadow: inset 0 -2px 1px rgba(0,0,0,.05); }
 .buttons button.secondary:hover { background: #f7f7f8; }
+/* smoothing progress: chunky pixels fill the button from left to right, with a ragged leading edge */
+.pfill {
+  position: absolute; inset: 0; width: 100%; height: 100%; border-radius: inherit; z-index: 0; pointer-events: none;
+  image-rendering: pixelated; opacity: 0; transition: opacity .3s;
+}
+.pfill.on { opacity: 1; }
+.buttons button > .blbl, #smoothBtn > svg { position: relative; z-index: 1; }
+#smoothBtn { overflow: hidden; }
 
 /* left-edge grabber for resizing the panel's width */
 #resizer { position: absolute; left: -6px; top: 12px; bottom: 12px; width: 12px; cursor: var(--scrub-cursor); z-index: 5; touch-action: none; }
@@ -226,8 +243,10 @@ html.panel-resizing, html.panel-resizing * { cursor: var(--scrub-cursor) !import
 <body>
 <canvas id="c"></canvas>
 <div id="cur"><i></i></div>
-<div id="hint">Drop an audio file, or press Space</div>
-<aside id="panel">
+<div id="hint" role="status"><span id="hintText">Drop an audio file, or press Space</span><button id="hintClose" type="button" aria-label="Close">
+  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6"/></svg>
+</button></div>
+<aside id="panel" class="collapsed">
   <header>
     <strong>Sand Sound</strong>
     <span class="hactions">
@@ -521,6 +540,7 @@ function shakeSmooth() {
   for (let i = 0; i < H.length; i++) m += H[i];
   smoothLevel = m / H.length;
   smoothT = SMOOTH_FRAMES;
+  progEls.forEach(o => { o.seeded = false; });
 }
 function addShake(level, had) {
   const n2 = HW * HH;
@@ -1052,6 +1072,7 @@ function frame(now) {
   const was = shaking;
   shaking = buildField();
   if (smoothT > 0) { const lv = stepSmooth(); if (lv > 0.01) { addShake(lv, shaking); shaking = true; } heightDirty = dirty = true; }
+  updateProgress();
   if (shaking) { flow(); settleN = 40; heightDirty = dirty = true; }
   else if (was) { TF.fill(1); heightDirty = dirty = true; }       // the floor went still: slopes hold again
   if (ptrDown && plough()) { settleN = 40; heightDirty = dirty = true; }
@@ -1063,6 +1084,47 @@ function frame(now) {
   if (pN) { stepGrains(); dirty = true; }
   if (dirty) { dirty = false; draw(now); }
   requestAnimationFrame(frame);
+}
+
+/* ---------- smoothing progress on the Smooth sand buttons ----------
+   A blocky fill, one 4 px pixel at a time: columns fill from the left, and the front edge is ragged because each
+   pixel has its own moment to switch on. It holds full for a beat when the sand has settled, then fades. */
+const PCELL = 4, PSPREAD = 3;      // pixel size in CSS px; how many columns the ragged front spans
+const progEls = [];
+let progOn = false, progHide = 0;
+function addProgress(btn) {
+  const c = document.createElement("canvas");
+  c.className = "pfill"; c.setAttribute("aria-hidden", "true");
+  btn.prepend(c);
+  progEls.push({ btn, c, ctx: c.getContext("2d"), cols: 0, rows: 0, thr: null, tone: null, seeded: false });
+}
+function drawProgress(o, p) {
+  const cols = Math.max(1, Math.ceil(o.btn.clientWidth / PCELL)), rows = Math.max(1, Math.ceil(o.btn.clientHeight / PCELL));
+  if (cols !== o.cols || rows !== o.rows || !o.seeded) {
+    o.cols = cols; o.rows = rows; o.c.width = cols; o.c.height = rows;
+    o.thr = new Float32Array(cols * rows); o.tone = new Uint8Array(cols * rows);
+    for (let i = 0; i < o.thr.length; i++) { o.thr[i] = Math.random(); o.tone[i] = Math.random() < 0.3 ? 1 : 0; }
+    o.img = o.ctx.createImageData(cols, rows); o.seeded = true;
+  }
+  const d = o.img.data, front = p * (cols + PSPREAD);
+  for (let r = 0, i = 0; r < rows; r++) for (let col = 0; col < cols; col++, i++) {
+    const on = col + o.thr[i] * PSPREAD < front, k = i * 4;
+    if (on) { const v = o.tone[i] ? 207 : 221; d[k] = v; d[k + 1] = v; d[k + 2] = v + 2; d[k + 3] = 255; }
+    else d[k + 3] = 0;
+  }
+  o.ctx.putImageData(o.img, 0, 0);
+}
+function updateProgress() {
+  if (smoothT > 0) {
+    clearTimeout(progHide);
+    const p = 1 - smoothT / SMOOTH_FRAMES;
+    progEls.forEach(o => { drawProgress(o, p); o.c.classList.add("on"); });
+    progOn = true;
+  } else if (progOn) {                                              // settled: show it full, then let it go
+    progOn = false;
+    progEls.forEach(o => drawProgress(o, 1));
+    progHide = setTimeout(() => progEls.forEach(o => o.c.classList.remove("on")), 350);
+  }
 }
 
 /* ---------- panel ---------- */
@@ -1244,7 +1306,7 @@ function buildPanel() {
     body.appendChild(grid); cat.append(head, body); panelBody.appendChild(cat);
   });
   const row = document.createElement("div"); row.className = "buttons end";
-  const sc = document.createElement("button"); sc.type = "button"; sc.className = "secondary"; sc.textContent = "Smooth sand";
+  const sc = document.createElement("button"); sc.type = "button"; sc.className = "secondary"; sc.innerHTML = '<span class="blbl">Smooth sand</span>'; addProgress(sc);
   sc.addEventListener("click", shakeSmooth);
   const ra = document.createElement("button"); ra.type = "button"; ra.className = "secondary"; ra.textContent = "Reset all";
   ra.addEventListener("click", () => {
@@ -1304,6 +1366,7 @@ function togglePanel(hide) {
 document.getElementById("hideBtn").addEventListener("click", () => togglePanel(true));
 document.getElementById("showTab").addEventListener("click", () => togglePanel(false));
 document.getElementById("smoothBtn").addEventListener("click", () => shakeSmooth());
+addProgress(document.getElementById("smoothBtn"));
 
 /* ---------- keys, files ---------- */
 window.addEventListener("contextmenu", e => e.preventDefault());   // no right-click menu anywhere on the page
@@ -1414,11 +1477,14 @@ document.addEventListener("scroll", hideTip, true);
 
 /* ---------- go ---------- */
 try { initGL(); if (gl) initGrainsGL(); } catch (e) { console.error(e); }
-if (!gl || !prog) hint.textContent = "This needs WebGL 2, which this browser did not provide.";
+// the hint closes itself after 5 s, or with its close button (an error message stays until closed)
+document.getElementById("hintClose").addEventListener("click", () => hint.classList.add("gone"));
+if (!gl || !prog) document.getElementById("hintText").textContent = "This needs WebGL 2, which this browser did not provide.";
+else setTimeout(() => hint.classList.add("gone"), 5000);
 resize();
 buildPanel();
 record("init", true);                // the baseline for undo
-if (UI.hidden) panel.classList.add("collapsed");
+// the panel always starts hidden (H or the Show panel pill brings it out)
 updateUI();
 requestAnimationFrame(frame);
 </script>
