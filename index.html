@@ -1,0 +1,1358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sand Sound</title>
+<meta name="description" content="A sand floor that listens: sound shakes the grains into Chladni patterns.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --panel-bg: #ffffff; --panel-fg: #171717; --panel-muted: #737373; --panel-line: #e5e5e5;
+  --pill-line: #ededee; --pill-bg: #fcfcfd; --pill-hover: #f7f7f8;
+  --g200: #dddddf; --g300: #c3c3c6; --g500: #8e8e95; --gmain: #101011; --focus: #101011;
+  --cur: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2724%27 height=%2724%27 viewBox=%270 0 24 24%27%3E%3Cpath d=%27M5 3.5 19 11l-6.3 1.7L10.2 19z%27 fill=%27black%27 stroke=%27white%27 stroke-width=%271.5%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E") 5 4, default;
+  --cur-text: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2724%27 height=%2724%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke-linecap=%27round%27%3E%3Cpath d=%27M12 5v14M9.5 4.5h5M9.5 19.5h5%27 stroke=%27white%27 stroke-width=%274%27/%3E%3Cpath d=%27M12 5v14M9.5 4.5h5M9.5 19.5h5%27 stroke=%27black%27 stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, text;
+  --scrub-cursor: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2724%27 height=%2724%27 viewBox=%270 0 24 24%27%3E%3Cpath d=%27M2.5 12 9 7v10zM21.5 12 15 7v10z%27 fill=%27black%27 stroke=%27white%27 stroke-width=%271.5%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E") 12 12, ew-resize;
+}
+html, body { margin: 0; height: 100%; overflow: hidden; cursor: var(--cur); background: #cdb9a2; font-family: "Geist", system-ui, sans-serif; }
+canvas { position: fixed; left: 0; top: 0; display: block; width: 100%; height: 100%; cursor: none; touch-action: none; }
+
+/* ---------- sand cursor: a fingertip seen from above. Its pad sits on the pointer; the finger trails
+   behind the direction of travel and leans further back the faster it moves (script: updateCur). ---------- */
+#cur { position: fixed; left: 0; top: 0; z-index: 4; width: 0; height: 0; pointer-events: none; opacity: 0; transition: opacity .15s; }
+#cur.on { opacity: 1; }
+#cur i {
+  position: absolute; left: calc(var(--r) * -1); top: calc(var(--r) * -1); box-sizing: border-box;
+  width: calc(var(--r) * 2 + var(--len)); height: calc(var(--r) * 2); border-radius: var(--r);
+  transform-origin: var(--r) var(--r); transform: rotate(var(--a));
+  border: 1.5px solid rgba(16,16,17,.8);
+  background: linear-gradient(90deg, rgba(16,16,17,.30), rgba(16,16,17,.16));
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.55);
+  -webkit-mask-image: linear-gradient(90deg, #000 45%, transparent); mask-image: linear-gradient(90deg, #000 45%, transparent);
+  transition: background .12s;
+}
+#cur i::before {                                   /* the nail */
+  content: ""; position: absolute; left: calc(var(--r) * .22); top: 50%; box-sizing: border-box;
+  width: calc(var(--r) * 1.05); height: calc(var(--r) * 1.2); margin-top: calc(var(--r) * -.6);
+  border-radius: 46% 34% 34% 46% / 50%; background: rgba(255,255,255,.34); border: 1px solid rgba(255,255,255,.7);
+}
+#cur.down i { background: linear-gradient(90deg, rgba(16,16,17,.46), rgba(16,16,17,.24)); }
+
+/* ---------- hint ---------- */
+#hint {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 5; pointer-events: none;
+  padding: 8px 12px; border-radius: 10px; background: rgba(16,16,17,.78); color: #f7f7f8;
+  font: 400 12px/1 "Geist Mono", ui-monospace, monospace; letter-spacing: -.03em; white-space: nowrap;
+  transition: opacity .4s;
+}
+#hint.gone { opacity: 0; }
+body.dropping canvas { outline: 2px dashed rgba(255,255,255,.5); outline-offset: -12px; }
+
+/* ---------- tooltip: a dark pill with the label and one keycap per key (script: Tooltip) ---------- */
+#tip {
+  position: fixed; left: 0; top: 0; z-index: 30; pointer-events: none;
+  display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px; border-radius: 6px;
+  background: #101011; color: #f7f7f8;
+  font: 400 12px/1 "Geist Mono", ui-monospace, monospace; letter-spacing: -.03em; white-space: nowrap;
+  opacity: 0; transform: translateY(-2px); transition: opacity .08s, transform .08s;
+}
+#tip.show { opacity: 1; transform: none; }
+#tip .keys { display: flex; align-items: center; gap: 4px; }
+#tip kbd {
+  box-sizing: border-box; min-width: 16px; height: 16px; padding: 0 3px; margin: 0; border-radius: 2px;
+  display: grid; place-items: center; background: #a8a8ad; color: #101011;
+  font: 400 12px/1 "Geist Mono", ui-monospace, monospace; letter-spacing: -.03em;
+}
+
+/* ---------- panel ---------- */
+#panel {
+  position: fixed; top: 16px; right: 16px; z-index: 10; width: 300px; max-height: calc(100vh - 32px);
+  display: flex; flex-direction: column; background: var(--panel-bg); color: var(--panel-fg);
+  border: 1px solid var(--panel-line); border-radius: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.10);
+  font-size: 13px; line-height: 1.4;
+  transition: transform .28s cubic-bezier(.2,.8,.2,1), opacity .2s, visibility 0s;
+}
+#panel.collapsed { transform: translateX(calc(100% + 24px)); opacity: 0; visibility: hidden; pointer-events: none; transition: transform .28s cubic-bezier(.2,.8,.2,1), opacity .2s, visibility 0s .28s; }
+#panel header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; user-select: none; border-bottom: 1px solid var(--panel-line); }
+#panel header strong { font-weight: 600; font-size: 13px; letter-spacing: -.01em; }
+.hbtn { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #101011; cursor: var(--cur); transition: background .12s; }
+.hbtn svg { width: 15px; height: 15px; display: block; }
+.hactions { display: flex; align-items: center; gap: 2px; }
+.hbtn:hover:not([aria-disabled="true"]) { background: #f0f0f1; }
+.hbtn:active:not([aria-disabled="true"]) { background: #e6e6e8; }
+.hbtn[aria-disabled="true"] { opacity: .28; cursor: default; }   /* not [disabled]: a disabled button would swallow the hover that shows its tooltip */
+.hbtn:focus-visible, #showTab:focus-visible { outline: 2px solid #101011; outline-offset: 1px; }
+#showTab {
+  position: fixed; top: 16px; right: 16px; z-index: 11; width: 104px; height: 32px; padding: 0 8px; box-sizing: border-box;
+  display: flex; flex-direction: row-reverse; align-items: center; gap: 6px;
+  border: 1px solid var(--panel-line); border-radius: 10px; background: var(--panel-bg); color: var(--panel-fg); cursor: var(--cur);
+  box-shadow: 0 8px 30px rgba(0,0,0,.10); font: 500 12px/1 "Geist", system-ui, sans-serif; letter-spacing: -.01em; white-space: nowrap;
+  transform: translateX(8px) scale(.9); opacity: 0; pointer-events: none;
+  transition: transform .28s cubic-bezier(.2,.8,.2,1), opacity .2s, background .12s;
+}
+#showTab svg { width: 15px; height: 15px; display: block; flex: none; }
+#showTab:hover { background: #f0f0f1; }
+#panel.collapsed ~ #showTab { transform: none; opacity: 1; pointer-events: auto; transition-delay: .1s; }
+
+#panel .body { overflow-y: auto; overflow-x: hidden; padding: 4px 14px 14px; scrollbar-width: thin; scrollbar-color: #c3c3c6 transparent; }
+.cat { margin-top: 2px; }
+.cat-head {
+  display: flex; width: 100%; align-items: center; justify-content: space-between; padding: 12px 0 14px; border: 0; background: none;
+  color: var(--panel-fg); cursor: var(--cur); text-align: left; font: 500 16px/1.2 "Geist", system-ui, sans-serif; letter-spacing: -.01em;
+}
+.cat-head svg { width: 12px; height: 12px; color: #8e8e95; transition: transform .18s ease; }
+.cat-head:hover svg { color: var(--panel-fg); }
+.cat-head:focus-visible { outline: 2px solid #101011; outline-offset: 2px; border-radius: 4px; }
+.cat.closed .cat-head svg { transform: rotate(-90deg); }
+.cat-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .2s ease; }
+.cat.closed .cat-body { grid-template-rows: 0fr; }
+.cat-body > .grid { min-height: 0; overflow: hidden; display: grid; grid-template-columns: 1fr; gap: 8px; padding-bottom: 2px; }
+.cat.closed .cat-body > .grid { visibility: hidden; transition: visibility 0s linear .2s; }
+.grid > [hidden] { display: none; }
+.note { margin: 0 0 2px; color: #8e8e95; font-size: 12px; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* reset chip */
+.reset { display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; background: #ededee; cursor: var(--cur); visibility: hidden; transition: background .12s; }
+.reset svg { display: block; width: 10px; height: 10px; }
+.reset:hover { background: #dddddf; }
+
+/* segmented source switch */
+.seg { display: flex; gap: 6px; }
+.seg button {
+  flex: 1; height: 32px; padding: 0; border: 1px solid #ededee; border-radius: 10px; background: #fcfcfd; color: #5c5c61;
+  font: 400 14px/1 "Geist", system-ui, sans-serif; letter-spacing: -.03em; cursor: var(--cur); box-shadow: inset 0 -2px 1px rgba(0,0,0,.05);
+  transition: background .12s, color .12s;
+}
+.seg button:hover { background: #f7f7f8; }
+.seg button.on { background: linear-gradient(to bottom, #d8d8da, #cdcdd0); color: #2a2a2d; border-color: #cdcdd0; }
+.seg button:focus-visible { outline: 2px solid #101011; outline-offset: 2px; }
+
+/* scrub pill */
+.num {
+  position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; height: 40px; padding: 0 12px; box-sizing: border-box;
+  border-radius: 12px; background: var(--pill-bg); border: 1px solid var(--pill-line);
+  font-size: 14px; line-height: 1; letter-spacing: -.03em; color: var(--gmain);
+  cursor: var(--scrub-cursor); user-select: none; -webkit-user-select: none; touch-action: pan-y; transition: background .12s, border-color .12s;
+}
+.num::after { content: ""; position: absolute; inset: 0; z-index: 2; border-radius: inherit; pointer-events: none; box-shadow: inset 0 -2px 1px rgba(0,0,0,.05); }
+.num:hover, .num.dragging { background: var(--pill-hover); }
+.num.editing { background: var(--pill-bg); border-color: var(--focus); cursor: var(--cur-text); }
+.num > :not(.track):not(.reset) { position: relative; z-index: 1; }
+.num .track { position: absolute; inset: 0; border-radius: 11px; overflow: hidden; pointer-events: none; }
+.num .dots { position: absolute; left: 11px; right: 11px; top: 18px; height: 2px; display: flex; justify-content: space-between; opacity: 0; transition: opacity .12s; }
+.num .dots i { width: 2px; height: 2px; border-radius: 50%; background: var(--g200); }
+.num .fill { position: absolute; left: 0; top: 0; bottom: 0; width: var(--p, 0px); background: var(--g200); border-radius: 11px 0 0 11px; opacity: 0; transition: opacity .12s; }
+.num .fill .dots { right: auto; left: 11px; width: calc(var(--pw, 100px) + 2px); opacity: 1; }
+.num .fill .dots i { background: var(--g300); }
+.num .handle { position: absolute; top: 50%; left: var(--p, 0px); width: 4px; height: 30px; margin: -15px 0 0 -2px; box-sizing: border-box; background: var(--g200); border: .25px solid transparent; border-radius: 12px; opacity: 0; transition: opacity .12s, background .12s; }
+.num:hover .dots, .num.dragging .dots, .num:hover .handle, .num.dragging .handle { opacity: 1; }
+.num.dragging .handle { background: var(--pill-hover); border-color: var(--g500); box-shadow: 0 0 1px rgba(0,0,0,.3); }
+.num.dragging .fill { opacity: 1; }
+.num.editing .dots, .num.editing .handle, .num.editing .fill { opacity: 0; }
+.num .lbl { flex: 0 1 auto; min-width: 0; color: var(--g500); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .12s; }
+.num.dragging .lbl { opacity: 0; }
+.num .val { display: inline-grid; flex: none; font-variant-numeric: tabular-nums; }
+.num .val::after { content: attr(data-v); padding-right: 1px; visibility: hidden; white-space: pre; grid-area: 1 / 1; font: inherit; }
+.num input { grid-area: 1 / 1; width: 0; min-width: 100%; border: 0; outline: 0; background: transparent; padding: 0; margin: 0; font: inherit; letter-spacing: inherit; font-variant-numeric: tabular-nums; color: inherit; cursor: inherit; caret-color: var(--focus); }
+.num.editing input { cursor: var(--cur-text); }
+.num input::selection { background: rgba(16,16,17,.14); }
+.num .unit { flex: none; margin-left: -8px; }
+.num .reset, .col .reset { position: absolute; z-index: 3; right: 8px; top: 50%; margin-top: -8px; }
+html.scrubbing, html.scrubbing * { cursor: var(--scrub-cursor) !important; user-select: none !important; }
+
+/* colour pill */
+.col {
+  position: relative; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; box-sizing: border-box;
+  border-radius: 12px; background: var(--pill-bg); border: 1px solid var(--pill-line); box-shadow: inset 0 -2px 1px rgba(0,0,0,.05);
+  font-size: 14px; letter-spacing: -.03em; color: var(--g500);
+}
+.col input { width: 44px; height: 24px; padding: 0; border: 1px solid var(--pill-line); border-radius: 6px; background: none; cursor: var(--cur); }
+.col input::-webkit-color-swatch-wrapper { padding: 0; }
+.col input::-webkit-color-swatch { border: 0; border-radius: 5px; }
+.col input::-moz-color-swatch { border: 0; border-radius: 5px; }
+.col code { font: 400 12px/1 "Geist Mono", ui-monospace, monospace; color: var(--gmain); }
+
+/* buttons */
+.buttons { display: flex; gap: 8px; }
+.buttons.end { margin-top: 16px; }
+.buttons button {
+  position: relative; flex: 1; height: 40px; padding: 0 12px; box-sizing: border-box; font: 400 14px/1 "Geist", system-ui, sans-serif;
+  letter-spacing: -.03em; text-align: center; white-space: nowrap; border-radius: 12px; cursor: var(--cur); transition: filter .12s, transform .06s, background .12s;
+}
+.buttons button:active { transform: scale(.98); }
+.buttons button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.buttons button.primary { border: 0; color: #f7f7f8; background: radial-gradient(120% 160% at 36% -24%, #57575c, #101011 70%); box-shadow: inset 0 -2px 4px rgba(255,255,255,.3); }
+.buttons button.primary:hover { filter: brightness(1.18); }
+.buttons button.secondary { border: 1px solid #ededee; background: #fcfcfd; color: #101011; box-shadow: inset 0 -2px 1px rgba(0,0,0,.05); }
+.buttons button.secondary:hover { background: #f7f7f8; }
+
+@media (max-width: 520px) {
+  #panel { top: auto; bottom: 8px; left: 8px; right: 8px; width: auto; max-height: 50vh; }
+  #panel.collapsed { transform: translateY(calc(100% + 16px)); }
+  #showTab { top: auto; bottom: 8px; right: 8px; }
+  #hint { bottom: auto; top: 20px; }
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="cur"><i></i></div>
+<div id="hint">Drop an audio file, or press Space</div>
+<aside id="panel">
+  <header>
+    <strong>Sand Sound</strong>
+    <span class="hactions">
+      <button id="undoBtn" class="hbtn" type="button" data-tip="Undo" data-key="Ctrl+Z" aria-label="Undo" aria-disabled="true">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5H9a3.5 3.5 0 0 1 0 7H6"/></svg>
+      </button>
+      <button id="redoBtn" class="hbtn" type="button" data-tip="Redo" data-key="Ctrl+Shift+Z" aria-label="Redo" aria-disabled="true">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 3.5l3 3-3 3"/><path d="M13.5 6.5H7a3.5 3.5 0 0 0 0 7h3"/></svg>
+      </button>
+      <button id="hideBtn" class="hbtn" type="button" data-tip="Hide panel" data-key="H" aria-label="Hide panel">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg>
+      </button>
+    </span>
+  </header>
+  <div class="body" id="panelBody"></div>
+</aside>
+<button id="showTab" type="button" aria-label="Show panel">
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
+  <span>Show panel</span>
+</button>
+<input id="fileInput" type="file" accept="audio/*" hidden>
+
+<script>
+/* =====================================================================
+   Sand Sound: a top-down bed of sand on a floor that resonates with sound.
+   Where the floor shakes harder than gravity, grains hop about and drain away; they pile up
+   along the lines that stay still (Chladni figures). Steep piles slump to sand's natural slope.
+   In silence the sand keeps its shape. Drag to draw a groove.
+   Background and sources: reports/Sand response to sound vibration.md
+   ===================================================================== */
+
+/* ---------- settings ---------- */
+const DEFAULTS = {
+  _v: 3,
+  // sound
+  source: "file",        // "file" | "mic" | "tone"
+  tone: 240,             // Hz, test tone
+  volume: 60,            // %, what you hear (file and tone)
+  sensitivity: 12,       // how hard the sound drives the floor. Sand only moves where the shaking beats gravity.
+  smoothing: 0.6,        // how slowly the floor's resonances follow the sound (0 = instant)
+  // floor (the vibrating plate under the sand)
+  pitch: 60,             // Hz, the floor's lowest resonance. Every other resonance is a multiple of it.
+  resonance: 12,         // Q: how sharply each resonance is tuned. High = only exact pitches ring.
+  // sand
+  depth: 6,              // px, thickness of the loose top layer of sand
+  flow: 8,               // transport steps per frame: how fast shaken sand travels
+  repose: 34,            // degrees, the steepest slope still sand can hold (dry sand: about 34)
+  finger: 14,            // px, radius of the groove a drag draws
+  grain: 1.2,            // px per grain
+  variation: 0.5,        // grain roughness and shade difference
+  shimmer: 0.5,          // how many grains visibly hop where the floor is shaking
+  // look
+  sand: "#cdb9a2",
+  light: 225,            // degrees, where the light comes from (225 = top left)
+  elevation: 28,         // degrees above the sand; low = long shadows
+  shadow: 1,             // strength of the cast shadows
+  softness: 0.25         // 0 = hard sunlight, 1 = soft overcast light
+};
+
+const FIELDS = [
+  { title: "Sound", items: [
+    { type: "source" },
+    { key: "tone", label: "Tone", min: 40, max: 2000, step: 1, unit: "Hz", effect: "audio", show: "tone" },
+    { key: "volume", label: "Volume", min: 0, max: 100, step: 1, unit: "%", effect: "audio" },
+    { key: "sensitivity", label: "Sensitivity", min: 1, max: 100, step: 1, unit: "×" },
+    { key: "smoothing", label: "Smoothing", min: 0, max: 0.95, step: 0.05 }
+  ]},
+  { title: "Floor", items: [
+    { key: "pitch", label: "Lowest pitch", min: 20, max: 200, step: 1, unit: "Hz" },
+    { key: "resonance", label: "Resonance", min: 2, max: 60, step: 1 }
+  ]},
+  { title: "Sand", items: [
+    { key: "depth", label: "Depth", min: 1, max: 12, step: 0.5, unit: "px", effect: "smooth" },
+    { key: "flow", label: "Flow speed", min: 1, max: 16, step: 1 },
+    { key: "repose", label: "Repose angle", min: 15, max: 45, step: 1, unit: "°" },
+    { key: "finger", label: "Finger", min: 4, max: 60, step: 1, unit: "px" },
+    { key: "grain", label: "Grain size", min: 0.5, max: 4, step: 0.1, unit: "px" },
+    { key: "variation", label: "Roughness", min: 0, max: 1, step: 0.05 },
+    { key: "shimmer", label: "Shimmer", min: 0, max: 1, step: 0.05 }
+  ]},
+  { title: "Look", items: [
+    { type: "color", key: "sand", label: "Sand" },
+    { key: "light", label: "Light angle", min: 0, max: 360, step: 5, unit: "°" },
+    { key: "elevation", label: "Light height", min: 10, max: 80, step: 1, unit: "°" },
+    { key: "shadow", label: "Shadow", min: 0, max: 1, step: 0.05 },
+    { key: "softness", label: "Softness", min: 0, max: 1, step: 0.05 }
+  ]}
+];
+
+const MAX_CELLS = 200000;          // cap on the sand grid, so big screens stay fast
+const MAX_MODES = 6;               // how many resonances shape the floor at once (the strongest ones)
+const FLOW = 0.06;                 // transport strength per step, just above lift-off
+const F_MIN = 30, F_MAX = 8000;    // Hz, the part of the spectrum the floor listens to
+
+const STORE = "sandSoundSettings", STORE_UI = "sandSoundPanelUI";
+let S = { ...DEFAULTS };
+try { const j = JSON.parse(localStorage.getItem(STORE)); if (j && j._v === DEFAULTS._v) Object.assign(S, j); } catch (e) {}
+let UI = { hidden: false, closed: {} };
+try { Object.assign(UI, JSON.parse(localStorage.getItem(STORE_UI)) || {}); } catch (e) {}
+const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {} };
+const saveUI = () => { try { localStorage.setItem(STORE_UI, JSON.stringify(UI)); } catch (e) {} };
+
+/* ---------- the floor's resonances ----------
+   The floor behaves like a square plate shaken at its centre. Such a plate only rings in shapes
+   that are mirror-symmetric both ways: cos(n pi x) cos(m pi y) + cos(m pi x) cos(n pi y) with n and m
+   even. Stiff plates carry bending waves, so a shape's pitch rises with (n² + m²): twice the lines
+   needs four times the frequency. (The cosine shapes are the usual approximation; they are least
+   accurate for the two or three lowest shapes.) */
+const MODES = [];
+for (let m = 0; m <= 16; m += 2) for (let n = 0; n <= m; n += 2) if (n + m) MODES.push([n, m]);
+const NM = MODES.length;
+const E = new Float32Array(NM);    // how strongly each resonance is ringing (squared amplitude)
+
+/* ---------- state ---------- */
+const cv = document.getElementById("c");
+const gl = cv.getContext("webgl2", { antialias: false, alpha: false });
+let VW = 0, VH = 0;                // the page in CSS px (the sand lives in this space)
+let DPR = 1, OX = 0, OY = 0;       // screen pixels per CSS px (browser zoom x pinch zoom), and the corner of the visible part
+let HC = 3, HW = 0, HH = 0;        // sand grid: cell size in CSS px, and its size in cells
+let H, H2, QV;                     // loose sand per cell (px thick), a scratch copy, and sand leaving each cell
+let G2, LAM, TF;                   // per cell: shaking² (1 = gravity), share of sand hopping out per step, slope factor
+let DXY;                           // per cell: how far the grains now here have been carried from where they started (x, y in px)
+let TEXD;                          // height + shaking + grain shift packed for the GPU
+let cxa, cxb, cya, cyb;            // 1D cosine tables for the mode being added
+let shaking = false, settleN = 0;
+let dirty = true;                  // the picture needs redrawing
+let heightDirty = true;            // the sand texture needs uploading
+
+/* ---------- renderer: the sand grid lit as a bed of sand ---------- */
+const VERT = `#version 300 es
+void main() { gl_Position = vec4(vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0), 0.0, 1.0); }`;
+const FRAG = `#version 300 es
+precision highp float;
+uniform sampler2D uH;              // r: sand height in CSS px, g: shaking² (1 = lift-off), ba: how far these grains were carried, CSS px
+uniform vec2 uRes, uGrid, uOff;    // canvas size in device px; grid size in cells; where the canvas starts on the page, device px
+uniform float uCell, uDpr;         // device px per cell; device px per CSS px
+uniform vec3 uSand, uLight;        // sand colour; unit vector toward the light (y points down the screen)
+uniform float uShadow, uGrain, uVar, uShim, uTime, uDepth, uSoft;
+uniform vec2 uSeedA, uSeedB;       // which arrangement of grains: the settled one, and the one a smoothing shake is moving them to
+uniform float uMix;                // how far through that move (0..1)
+out vec4 o;
+float hash(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+}
+float hgt(vec2 p) { return texture(uH, p / uCell / uGrid).r * uDpr; }   // height in device px
+float hgtS(vec2 p) {                                                    // the same, smoothly curved between cells (bicubic)
+  vec2 st = p / uCell - .5, i = floor(st), f = fract(st), f2 = f * f, f3 = f2 * f;
+  vec2 w0 = (1. - 3. * f + 3. * f2 - f3) / 6., w1 = (3. * f3 - 6. * f2 + 4.) / 6., w3 = f3 / 6., w2 = 1. - w0 - w1 - w3;
+  vec2 g0 = w0 + w1, g1 = w2 + w3, a = (i + w1 / g0 - .5) / uGrid, b = (i + w3 / g1 + 1.5) / uGrid;
+  return (g0.y * (g0.x * texture(uH, vec2(a.x, a.y)).r + g1.x * texture(uH, vec2(b.x, a.y)).r) +
+          g1.y * (g0.x * texture(uH, vec2(a.x, b.y)).r + g1.x * texture(uH, vec2(b.x, b.y)).r)) * uDpr;
+}
+// irregular grains: the nearest of a scatter of jittered points owns each pixel. "so" picks the arrangement.
+void grains(vec2 gp, vec2 so, out vec2 gc, out vec2 toC, out float d1, out float d2) {
+  vec2 ci = floor(gp), cf = fract(gp);
+  gc = ci; toC = vec2(0.); d1 = 9.; d2 = 9.;
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+    vec2 id = ci + vec2(i, j), r = vec2(i, j) + vec2(hash(id + so + 3.3), hash(id + so + 8.1)) - cf;
+    float d = dot(r, r);
+    if (d < d1) { d2 = d1; d1 = d; gc = id; toC = r; } else if (d < d2) d2 = d;
+  }
+}
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) + uOff;
+  float e = uCell * .6, h0 = hgtS(p);
+  vec2 g = vec2(hgtS(p + vec2(e, 0.)) - hgtS(p - vec2(e, 0.)), hgtS(p + vec2(0., e)) - hgtS(p - vec2(0., e))) / (2. * e);
+
+  // grains: irregular pebbles packed edge to edge (the nearest of a scatter of jittered points owns each pixel),
+  // each with its own facing and shade. They are drawn at whatever size the zoom makes them, so they stay
+  // sharp close up. Where the floor shakes harder than gravity some grains change every frame.
+  vec4 cell = texture(uH, p / uCell / uGrid);
+  float shake = cell.g;
+  float gpx = uGrain * uDpr;                                           // grain size in screen pixels
+  // where these grains started: pushed sand carries its grains along. Read per cell, not blended between cells,
+  // so grains shift as whole grains and never stretch.
+  vec2 carry = texelFetch(uH, clamp(ivec2(floor(p / uCell)), ivec2(0), ivec2(uGrid) - 1), 0).ba;
+  vec2 pg = p - carry * uDpr, gc, toC, so = uSeedA;
+  float d1, d2;
+  grains(pg / gpx, uSeedA, gc, toC, d1, d2);
+  // while the tray is being shaken smooth, grains one by one land in new places (a fresh arrangement, carry
+  // forgotten), so when the shake ends nothing has to jump
+  if (hash(gc + uSeedA + 91.7) < uMix) { pg = p; so = uSeedB; grains(pg / gpx, uSeedB, gc, toC, d1, d2); }
+  float big = clamp(gpx / 2.5 - .4, 0., 1.);                           // grain shape only shows once a grain spans a few pixels
+  vec2 off = -toC * 1.6 * big;                                         // from the grain's middle to this pixel
+  float gap = (1. - smoothstep(0., .22, sqrt(d2) - sqrt(d1))) * big;   // the crack between two grains
+  float hop = step(hash(gc + so + 7.7), uShim * clamp((shake - 1.) * .5, 0., 1.));
+  vec2 sd = gc + so + hop * floor(uTime * 30.) * vec2(13., 71.);
+  float a = hash(sd), b = hash(sd + 19.19), c = hash(sd + 47.3);
+  // each grain is a tilted little dome: its own facing, plus a lit side and a shaded side
+  vec3 n = normalize(vec3(-g + (vec2(a, b) - .5) * uVar * .9 + off * uVar * .6, 1.));
+  // soft light: the light wraps a little round the slopes, and bright faces roll off instead of burning out,
+  // so steep ridges (deep sand) still read as sand rather than as chrome
+  float wrap = .6 * uSoft;
+  float dif = max(dot(n, uLight) + wrap, 0.) / (uLight.z + wrap);     // 1 on flat sand
+  dif = dif > 1. ? 1. + (dif - 1.) / (1. + (dif - 1.) * 2.5 * uSoft) : dif;
+
+  // cast shadow: walk toward the light and see whether a ridge stands in the way
+  float tanE = uLight.z / length(uLight.xy);
+  vec2 ld = normalize(uLight.xy);
+  float reach = 6. * uDepth * uDpr / tanE, occ = 0.;
+  for (int i = 1; i <= 14; i++) {
+    float d = reach * float(i) / 14.;
+    occ = max(occ, (hgtS(p + ld * d) - (h0 + d * tanE)) / ((.35 + .8 * uSoft) * uDepth * uDpr + .001));   // softer light: softer shadow edges
+  }
+  float sh = clamp(occ, 0., 1.) * uShadow;
+
+  float alb = 1. + (c - .5) * uVar * .22;
+  alb *= 1. - step(.975, a) * .28 * uVar;                              // a few dark grains
+  alb += step(.988, b) * .18 * uVar;                                   // a few bright ones
+  alb *= .97 + .06 * vnoise(pg / (70. * uDpr));                         // soft patchiness
+  // hollows sit a little darker and crests a little lighter, so a groove that runs along the light still reads
+  alb *= mix(.87, 1., smoothstep(0., uDepth * uDpr, h0)) * (1. + .06 * smoothstep(uDepth * uDpr, 2.2 * uDepth * uDpr, h0));
+  alb *= 1. - .4 * uVar * gap;                                         // dark cracks between big grains
+  float amb = .4 + .2 * uSoft;                                         // light from the whole sky fills the shadows
+  vec3 col = uSand * alb * (amb + (1. - amb) * dif * (1. - sh * (1. - .35 * uSoft)));
+  float glint = pow(max(dot(n, normalize(uLight + vec3(0., 0., 1.))), 0.), 60.) * step(.8, c);
+  col += vec3(1., .96, .88) * glint * uVar * .5 * (1. - sh);           // quartz grains catching the light
+  col = mix(col, col * vec3(.93, .86, .8), sh * .6);                   // shadows run a little warm
+  o = vec4(col, 1.);
+}`;
+let prog = null, tex = null;
+const U = {};
+function initGL() {
+  if (!gl) return;
+  const mk = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  prog = gl.createProgram();
+  gl.attachShader(prog, mk(gl.VERTEX_SHADER, VERT)); gl.attachShader(prog, mk(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  ["uH", "uRes", "uGrid", "uOff", "uCell", "uDpr", "uSand", "uLight", "uShadow", "uGrain", "uVar", "uShim", "uTime", "uDepth", "uSoft", "uSeedA", "uSeedB", "uMix"]
+    .forEach(n => { U[n] = gl.getUniformLocation(prog, n); });
+  gl.bindVertexArray(gl.createVertexArray());
+  tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+
+/* The canvas always covers exactly what is on screen, one canvas pixel per screen pixel. Any mismatch makes
+   the browser rescale the picture and blur the grains. With a pinch zoom only part of the page is visible,
+   so the canvas shrinks to that part and the sand is redrawn magnified, not stretched. */
+let boxW = 0, boxH = 0;            // the canvas's true size in screen pixels, when the browser reports it
+const vv = window.visualViewport;
+function fit() {
+  const dpr = window.devicePixelRatio || 1, sc = vv && vv.scale > 1.001 ? vv.scale : 1;
+  const w = sc > 1 ? vv.width : VW, h = sc > 1 ? vv.height : VH;
+  OX = sc > 1 ? vv.offsetLeft : 0; OY = sc > 1 ? vv.offsetTop : 0;
+  cv.style.left = OX + "px"; cv.style.top = OY + "px"; cv.style.width = w + "px"; cv.style.height = h + "px";
+  const cw = sc === 1 && boxW ? boxW : Math.round(w * sc * dpr), ch = sc === 1 && boxH ? boxH : Math.round(h * sc * dpr);
+  if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+  DPR = cw / w;
+  if (gl) gl.viewport(0, 0, cw, ch);
+  dirty = true;
+}
+if (window.ResizeObserver) {
+  try {
+    new ResizeObserver(es => {
+      const b = es[0].devicePixelContentBoxSize;
+      if (!b || !b[0]) return;
+      boxW = b[0].inlineSize; boxH = b[0].blockSize;
+      if (H) fit();
+    }).observe(cv, { box: "device-pixel-content-box" });
+  } catch (e) {}
+}
+if (vv) { vv.addEventListener("resize", () => { if (H) fit(); }); vv.addEventListener("scroll", () => { if (H) fit(); }); }
+
+function smooth() {                // instant reset (Depth change, Reset all): no shake to watch
+  H.fill(S.depth); DXY.fill(0); smoothT = 0;
+  if (smoothMix > 0) { seedA = seedB; seedB = [seedB[1], seedB[0] + 7]; smoothMix = 0; }
+  heightDirty = dirty = true;
+}
+
+/* "Smooth sand" the way you would with a real tray: give it a good shake. The whole floor vibrates harder than
+   gravity for a moment, so every grain hops, slopes can no longer hold, and the sand runs flat like a liquid
+   finding its level. The shake builds up, holds, and fades; no sand is added or lost. */
+const SMOOTH_FRAMES = 110;         // about 1.8 s
+const SMOOTH_PEAK = 1.5;           // extra shaking² at full strength (1 = gravity): a firm shake, not a violent one
+let smoothT = 0, smoothLevel = 0, smoothMix = 0;
+let seedA = [0, 0], seedB = [317, 529];
+function shakeSmooth() {
+  let m = 0;
+  for (let i = 0; i < H.length; i++) m += H[i];
+  smoothLevel = m / H.length;
+  smoothT = SMOOTH_FRAMES;
+}
+function addShake(level, had) {
+  const n2 = HW * HH;
+  for (let i = 0; i < n2; i++) {
+    const g = (had ? G2[i] : 0) + level;
+    G2[i] = g;
+    if (g > 1) {
+      const x = g - 1, l = FLOW * x * Math.sqrt(x);
+      LAM[i] = l > 0.22 ? 0.22 : l;
+      TF[i] = g > 6 ? 1 / 6 : 1 / g;
+    } else if (!had) { LAM[i] = 0; TF[i] = 1; }
+  }
+}
+function stepSmooth() {
+  smoothT--;
+  const t = 1 - smoothT / SMOOTH_FRAMES;
+  const ss = (a, b, x) => { x = Math.min(1, Math.max(0, (x - a) / (b - a))); return x * x * (3 - 2 * x); };
+  const env = ss(0, 0.15, t) * (1 - ss(0.7, 1, t));                // build up, hold, fade
+  const k = 0.035 * t, n2 = HW * HH;                               // the level spreads slowly at first, then faster
+  for (let i = 0; i < n2; i++) H[i] += (smoothLevel - H[i]) * k;    // fluidised sand runs toward its own level
+  smoothMix = Math.min(1, smoothMix + env / 70);                    // grains land in new places, faster while the shake is strong
+  if (!smoothT && smoothMix >= 1) {                                 // every grain has moved: the new arrangement becomes the settled one
+    seedA = seedB; seedB = [Math.floor(Math.random() * 900) + 100, Math.floor(Math.random() * 900) + 100];
+    smoothMix = 0; DXY.fill(0);
+  }
+  return SMOOTH_PEAK * env;
+}
+
+function resize() {
+  const oH = H, oW = HW, oHh = HH;
+  VW = Math.max(1, document.documentElement.clientWidth); VH = Math.max(1, document.documentElement.clientHeight);
+  HC = 3;
+  while ((VW / HC) * (VH / HC) > MAX_CELLS) HC += 0.5;
+  HW = Math.ceil(VW / HC) + 1; HH = Math.ceil(VH / HC) + 1;
+  const n = HW * HH;
+  H = new Float32Array(n); H2 = new Float32Array(n); QV = new Float32Array(n);
+  G2 = new Float32Array(n); LAM = new Float32Array(n); TF = new Float32Array(n).fill(1);
+  DXY = new Float32Array(n * 2);
+  TEXD = new Float32Array(n * 4);
+  cxa = new Float32Array(HW); cxb = new Float32Array(HW); cya = new Float32Array(HH); cyb = new Float32Array(HH);
+  if (oH) {                                        // keep what was there: stretch the old grid onto the new one
+    for (let j = 0; j < HH; j++) {
+      const oj = Math.min(oHh - 1, (j * oHh / HH) | 0);
+      for (let i = 0; i < HW; i++) H[j * HW + i] = oH[oj * oW + Math.min(oW - 1, (i * oW / HW) | 0)];
+    }
+  } else H.fill(S.depth);
+  fit();
+  if (gl) {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, HW, HH, 0, gl.RGBA, gl.FLOAT, TEXD);
+  }
+  shaking = false;
+  heightDirty = dirty = true;
+}
+
+function hexRGB(h) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(h || "");
+  const n = m ? parseInt(m[1], 16) : 0xffffff;
+  return [n >> 16 & 255, n >> 8 & 255, n & 255];
+}
+
+/* ---------- audio ---------- */
+let ac = null, analyser, outGain, audioEl, osc = null, toneGain = null, micStream = null, micSrc = null;
+let freqBuf, powBuf, binHz = 1;
+let playing = false, fileName = "", micError = "";
+
+function ensureAudio() {
+  if (ac) return;
+  ac = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = ac.createAnalyser(); analyser.fftSize = 4096; analyser.smoothingTimeConstant = 0.5;
+  outGain = ac.createGain(); outGain.gain.value = S.volume / 100; outGain.connect(ac.destination);
+  audioEl = new Audio(); audioEl.loop = true;
+  const el = ac.createMediaElementSource(audioEl); el.connect(analyser); el.connect(outGain);
+  freqBuf = new Float32Array(analyser.frequencyBinCount);
+  powBuf = new Float32Array(analyser.frequencyBinCount);
+  binHz = ac.sampleRate / analyser.fftSize;
+}
+
+function start() {
+  ensureAudio();
+  ac.resume();
+  micError = "";
+  if (S.source === "file") {
+    if (!audioEl.src) { fileInput.click(); return; }
+    playing = true;
+    audioEl.play().catch(() => { playing = false; updateUI(); });
+  } else if (S.source === "tone") {
+    osc = ac.createOscillator(); osc.frequency.value = S.tone;
+    toneGain = ac.createGain(); toneGain.gain.value = 0.2;
+    osc.connect(toneGain); toneGain.connect(analyser); toneGain.connect(outGain);
+    osc.start(); playing = true;
+  } else {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { micError = "No microphone access on this page."; updateUI(); return; }
+    playing = true;
+    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
+      .then(stream => {
+        if (!playing || S.source !== "mic") { stream.getTracks().forEach(t => t.stop()); return; }
+        micStream = stream; micSrc = ac.createMediaStreamSource(stream); micSrc.connect(analyser);
+      })
+      .catch(() => { playing = false; micError = "Microphone was blocked."; updateUI(); });
+  }
+  hint.classList.add("gone");
+  updateUI();
+}
+function stop() {
+  if (audioEl) audioEl.pause();
+  if (osc) { try { osc.stop(); } catch (e) {} osc.disconnect(); toneGain.disconnect(); osc = toneGain = null; }
+  if (micSrc) { micSrc.disconnect(); micSrc = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  playing = false;
+  updateUI();
+}
+function setSource(kind) {
+  const was = playing;
+  stop();
+  S.source = kind; save();
+  if (was && !(kind === "file" && !(audioEl && audioEl.src))) start();
+  updateUI();
+}
+function loadFile(file) {
+  if (!file) return;
+  ensureAudio();
+  stop();
+  if (audioEl.src) URL.revokeObjectURL(audioEl.src);
+  audioEl.src = URL.createObjectURL(file);
+  fileName = file.name;
+  S.source = "file"; save();
+  start();
+}
+function applyAudio() {
+  if (outGain) outGain.gain.value = S.volume / 100;
+  if (osc) osc.frequency.setTargetAtTime(S.tone, ac.currentTime, 0.02);
+}
+
+/* Each resonance of the floor is a tuned, damped oscillator. It picks up the part of the sound near its
+   own pitch (strongly on pitch, by 1/Q² far off it) and takes a moment to ring up and die away. */
+function analyse() {
+  if (!playing || !analyser) { for (let k = 0; k < NM; k++) E[k] = E[k] < 1e-6 ? 0 : E[k] * 0.8; return; }
+  analyser.getFloatFrequencyData(freqBuf);
+  const b0 = Math.max(1, Math.floor(F_MIN / binHz)), b1 = Math.min(freqBuf.length - 1, Math.ceil(F_MAX / binHz));
+  // power per bin; x13 undoes the analyser's window so a pure tone of amplitude A sums to about A²
+  for (let b = b0; b <= b1; b++) { const db = freqBuf[b]; powBuf[b] = db > -100 ? 13 * Math.pow(10, db / 10) : 0; }
+  const iq2 = 1 / (S.resonance * S.resonance), rate = 0.03 + (1 - S.smoothing) * 0.5;
+  for (let k = 0; k < NM; k++) {
+    const fk = S.pitch * (MODES[k][0] * MODES[k][0] + MODES[k][1] * MODES[k][1]) / 4;
+    let sum = 0;
+    for (let b = b0; b <= b1; b++) {
+      const p = powBuf[b];
+      if (p < 1e-9) continue;
+      const r = b * binHz / fk, r2 = r * r, d = 1 - r2;
+      sum += p * iq2 / (d * d + r2 * iq2);          // 1 on pitch, 1/Q² well below it
+    }
+    E[k] += (sum - E[k]) * rate;
+  }
+}
+
+/* ---------- the shaking floor ----------
+   Adds up how hard every point of the floor shakes (time-averaged, so resonances add as squares),
+   in units of gravity. Returns false when no point shakes hard enough to lift a grain. */
+const picks = [];
+function buildField() {
+  const g2 = S.sensitivity * S.sensitivity, L = Math.min(VW, VH), n2 = HW * HH;
+  let top = 0, tot = 0;
+  for (let k = 0; k < NM; k++) { tot += E[k]; if (E[k] > top) top = E[k]; }
+  if (tot * g2 <= 1) return false;
+  picks.length = 0;
+  for (let k = 0; k < NM; k++) if (E[k] >= top * 0.03) picks.push(k);
+  picks.sort((a, b) => E[b] - E[a]);
+  if (picks.length > MAX_MODES) picks.length = MAX_MODES;
+  G2.fill(0);
+  for (let q = 0; q < picks.length; q++) {
+    const k = picks[q], w = E[k] * g2 * 0.25;       // 0.25: the two-term shape peaks at 2
+    const n = MODES[k][0] * Math.PI, m = MODES[k][1] * Math.PI;
+    for (let i = 0; i < HW; i++) { const u = ((i + 0.5) * HC - VW / 2) / L + 0.5; cxa[i] = Math.cos(n * u); cxb[i] = Math.cos(m * u); }
+    for (let j = 0; j < HH; j++) { const v = ((j + 0.5) * HC - VH / 2) / L + 0.5; cya[j] = Math.cos(n * v); cyb[j] = Math.cos(m * v); }
+    for (let j = 0; j < HH; j++) {
+      const a = cyb[j], b = cya[j];
+      let o = j * HW;
+      for (let i = 0; i < HW; i++, o++) { const s = cxa[i] * a + cxb[i] * b; G2[o] += w * s * s; }
+    }
+  }
+  // Below gravity a grain never leaves the floor, so nothing moves. Above it grains hop at random, further
+  // the harder the shake (measured: spreading rate rises as about the cube of the shaking speed).
+  let any = false;
+  for (let i = 0; i < n2; i++) {
+    const g = G2[i];
+    if (g > 1) {
+      const x = g - 1, l = FLOW * x * Math.sqrt(x);
+      LAM[i] = l > 0.22 ? 0.22 : l;
+      TF[i] = g > 6 ? 1 / 6 : 1 / g;                // shaken sand cannot hold a steep slope
+      any = true;
+    } else { LAM[i] = 0; TF[i] = 1; }
+  }
+  return any;
+}
+
+/* Hopping grains: every step each cell throws a share of its loose sand to its four neighbours, a bigger
+   share where the floor shakes harder. Still areas throw nothing and only receive, so sand drains off the
+   shaking areas and piles up along the still lines. No sand is created or lost. */
+function flow() {
+  const n2 = HW * HH;
+  let a = H, b = H2;
+  for (let s = 0; s < S.flow; s++) {
+    for (let i = 0; i < n2; i++) QV[i] = a[i] * LAM[i];
+    for (let j = 0; j < HH; j++) {
+      const up = j > 0 ? -HW : 0, dn = j < HH - 1 ? HW : 0;
+      let o = j * HW;
+      b[o] = a[o] - 4 * QV[o] + QV[o] + QV[o + 1] + QV[o + up] + QV[o + dn];
+      for (let i = 1; i < HW - 1; i++) { o++; b[o] = a[o] - 4 * QV[o] + QV[o - 1] + QV[o + 1] + QV[o + up] + QV[o + dn]; }
+      o++;
+      b[o] = a[o] - 4 * QV[o] + QV[o - 1] + QV[o] + QV[o + up] + QV[o + dn];
+    }
+    const t = a; a = b; b = t;
+  }
+  H = a; H2 = b;
+}
+
+/* Avalanches: sand cannot stand steeper than its angle of repose, so wherever a slope is too steep the
+   extra slides downhill. Returns how much sand moved. */
+// a slope gave way between two cells: a grain breaks loose at the top and starts downhill
+function tumble(from, to) {
+  const fx = (from % HW + Math.random()) * HC, fy = (((from / HW) | 0) + Math.random()) * HC;
+  const dx = (to % HW) - (from % HW), dy = ((to / HW) | 0) - ((from / HW) | 0);
+  grain(fx, fy, dx * (0.2 + Math.random() * 0.5), dy * (0.2 + Math.random() * 0.5));
+}
+
+function settle() {
+  const T = Math.tan(S.repose * Math.PI / 180) * HC, TD = T * Math.SQRT2, n2 = HW * HH;
+  let moved = 0;
+  // every slope is judged on the sand as it stood at the start of the pass, and all the slides are applied
+  // together afterwards. (Sliding as we go would drag sand along the scan direction and ripple the ridges.)
+  const edge = (o, p, lim) => {
+    const d = H[o] - H[p], t = lim * (TF[o] < TF[p] ? TF[o] : TF[p]);
+    if (d > t) { const m = (d - t) * 0.1; QV[o] -= m; QV[p] += m; moved += m; if (m > 0.12 && Math.random() < m * 0.05) tumble(o, p); }
+    else if (d < -t) { const m = (-d - t) * 0.1; QV[o] += m; QV[p] -= m; moved += m; if (m > 0.12 && Math.random() < m * 0.05) tumble(p, o); }
+  };
+  for (let pass = 0; pass < 2; pass++) {
+    QV.fill(0);
+    for (let j = 0; j < HH; j++) {
+      const r = j * HW, last = j === HH - 1;
+      for (let i = 0; i < HW - 1; i++) {
+        const o = r + i;
+        edge(o, o + 1, T);
+        if (!last) { edge(o, o + HW, T); edge(o, o + HW + 1, TD); edge(o + 1, o + HW, TD); }
+      }
+      if (!last) edge(r + HW - 1, r + HW - 1 + HW, T);
+    }
+    for (let i = 0; i < n2; i++) H[i] += QV[i];
+  }
+  return moved;
+}
+
+/* ---------- pointer: drag to draw a groove; the sand pushed out of it piles up along the sides ---------- */
+let ptrDown = false, ptrFresh = false, px = 0, py = 0, lx = 0, ly = 0;
+/* Pressure: an Apple Pencil, a stylus or a force-sensing screen reports how hard it presses (0..1). A light touch
+   draws a shallow, narrow line; pressing hard digs a deeper, wider furrow. A mouse, or a screen that cannot sense
+   force, reports a fixed 0.5, which gives the normal groove. */
+let ptrPress = 1, ptrPressT = 1;   // 1 = normal; about 0.2 (feather light) to 2 (pressing hard)
+function pressOf(e) {
+  if (e.pointerType === "mouse" || !(e.pressure > 0)) return 1;
+  return Math.min(2, Math.max(0.2, Math.pow(e.pressure / 0.5, 0.8)));
+}
+const fingerR = () => S.finger * (0.6 + 0.4 * ptrPress);          // the tip spreads as it presses
+
+cv.addEventListener("pointerdown", e => {
+  if (e.button !== 0) return;
+  ptrDown = ptrFresh = true; px = lx = e.clientX; py = ly = e.clientY;
+  ptrPress = ptrPressT = pressOf(e);
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+});
+cv.addEventListener("pointermove", e => {
+  if (ptrDown && e.pointerType === "mouse" && !(e.buttons & 1)) ptrDown = false;   // the release was missed: stop drawing
+  if (ptrDown) { px = e.clientX; py = e.clientY; ptrPressT = pressOf(e); }
+});
+// listen on the window too, so a release over the panel or outside the page still ends the stroke
+const ptrEnd = () => { ptrDown = false; };
+["pointerup", "pointercancel", "blur"].forEach(t => window.addEventListener(t, ptrEnd));
+cv.addEventListener("lostpointercapture", ptrEnd);
+
+// the fingertip cursor follows the mouse over the sand (a finger on a touch screen needs none)
+const cur = document.getElementById("cur");
+let curX = 0, curY = 0, curLX = 0, curLY = 0, curVX = 0, curVY = 0, curA = 40, curLen = 0, curOn = false;
+function moveCur(e) {
+  if (e.pointerType === "touch") { curOn = false; cur.classList.remove("on"); return; }
+  curX = e.clientX; curY = e.clientY;
+  if (!curOn) { curOn = true; curLX = curX; curLY = curY; cur.classList.add("on"); }
+}
+["pointermove", "pointerdown", "pointerup"].forEach(t => cv.addEventListener(t, moveCur));
+cv.addEventListener("pointerleave", () => { if (!ptrDown) { curOn = false; cur.classList.remove("on"); } });
+cv.addEventListener("pointercancel", () => { curOn = false; cur.classList.remove("on"); });
+
+/* Once a frame: the finger turns to trail behind the way the pointer is going, and stretches back with speed.
+   When the pointer stops it keeps its last angle and straightens up. */
+function updateCur() {
+  if (!curOn) return;
+  curVX += (curX - curLX - curVX) * 0.3; curVY += (curY - curLY - curVY) * 0.3;
+  curLX = curX; curLY = curY;
+  const sp = Math.sqrt(curVX * curVX + curVY * curVY), R = ptrDown ? fingerR() : S.finger;
+  if (sp > 0.6) {
+    const target = Math.atan2(-curVY, -curVX) * 180 / Math.PI;
+    const d = ((target - curA + 540) % 360) - 180;                 // shortest way round
+    curA += d * Math.min(0.35, 0.08 + sp * 0.02);                  // faster strokes turn the finger faster
+  }
+  curLen += (R * (1.1 + Math.min(1.6, sp * 0.09)) - curLen) * 0.2;
+  cur.style.transform = `translate(${curX}px, ${curY}px)`;
+  cur.style.setProperty("--r", R + "px");
+  cur.style.setProperty("--len", curLen.toFixed(1) + "px");
+  cur.style.setProperty("--a", curA.toFixed(1) + "deg");
+  cur.classList.toggle("down", ptrDown);
+}
+
+let stamp = 0;
+const lump = (o, k) => { const v = Math.sin(o * 12.9898 + k * 78.233) * 43758.5453; return v - Math.floor(v); };   // 0..1, fixed per cell and stamp
+
+// soft blobs about a fingertip-width across, 0..1: where the rims heap up and where they stay thin
+function clump(x, y) {
+  const fx = x / 13, fy = y / 13, i = Math.floor(fx), j = Math.floor(fy);
+  let tx = fx - i, ty = fy - j; tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+  const h = (a, b) => lump(a * 57 + b * 131, 7);
+  return (h(i, j) * (1 - tx) + h(i + 1, j) * tx) * (1 - ty) + (h(i, j + 1) * (1 - tx) + h(i + 1, j + 1) * tx) * ty;
+}
+
+function plough() {
+  ptrPress += (ptrPressT - ptrPress) * 0.35;                        // follow the pressure smoothly, no flicker
+  const R = fingerR(), RO = R * 1.45, dig = Math.min(1, 0.25 + 0.75 * ptrPress);
+  const sdx = px - lx, sdy = py - ly, sl2 = sdx * sdx + sdy * sdy;
+  if (!sl2 && !ptrFresh) return false;    // finger resting: nothing new to push
+  const fresh = ptrFresh; ptrFresh = false;
+  const i0 = Math.max(0, ((Math.min(px, lx) - RO) / HC) | 0), i1 = Math.min(HW - 1, Math.ceil((Math.max(px, lx) + RO) / HC));
+  const j0 = Math.max(0, ((Math.min(py, ly) - RO) / HC) | 0), j1 = Math.min(HH - 1, Math.ceil((Math.max(py, ly) + RO) / HC));
+  const sl = Math.sqrt(sl2);
+  stamp++;
+  let dug = 0, rimW = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    for (let j = j0; j <= j1; j++) {
+      const y = (j + 0.5) * HC;
+      for (let i = i0; i <= i1; i++) {
+        const x = (i + 0.5) * HC;
+        let t = sl2 > 0 ? ((x - lx) * sdx + (y - ly) * sdy) / sl2 : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const ex = x - (lx + sdx * t), ey = y - (ly + sdy * t), q = Math.sqrt(ex * ex + ey * ey) / R, o = j * HW + i;
+        if (q < 1) {
+          if (!pass) {                                            // a round-bottomed trough with a slightly lumpy floor
+            const u = q < 0.4 ? 0 : (q - 0.4) / 0.6;
+            const keep = S.depth * (1 - dig * (1 - (u * u * (3 - 2 * u) * 0.92 + 0.08 * lump(o, 0))));   // a light touch only scrapes the top
+            if (H[o] > keep) { dug += H[o] - keep; H[o] = keep; }
+          }
+        } else if (q < 1.45 && (fresh || t >= 1 || Math.abs((x - lx) * sdy - (y - ly) * sdx) >= R * sl)) {
+          // the rim: all along both sides and ahead, never back over the groove just drawn
+          let w = Math.sin((q - 1) / 0.45 * Math.PI);
+          if (sl2 > 0) {                                        // sand ahead of the finger slides round to its sides; little stays in front
+            const f = (ex * sdx + ey * sdy) / (q * R * sl);
+            if (f > 0) w *= 1 - 0.75 * f;
+          }
+          w *= (0.25 + 1.5 * clump(x, y)) * (0.6 + 0.8 * lump(o, stamp));   // sand falls off a finger in clumps, not an even ribbon
+          if (!pass) rimW += w; else H[o] += dug * w / rimW;
+        }
+      }
+    }
+    if (!dug || !rimW) break;
+  }
+  if (sl2 > 0) { shove(sdx, sdy, sl); spray(sdx / sl, sdy / sl, sl, dug); }
+  lx = px; ly = py;
+  return true;
+}
+
+/* The finger bulldozes: sand at its leading edge is shouldered outward and a little forward, into the rims.
+   Sand behind it is left where it lies. Each cell remembers how far its grains have been carried, so the
+   grains you see slide with the sand. */
+let shoveBuf = new Float32Array(0);
+function shove(sdx, sdy, step) {
+  const R = fingerR(), RO = R * 1.45, ux = sdx / step, uy = sdy / step;
+  const i0 = Math.max(0, ((px - RO) / HC) | 0), i1 = Math.min(HW - 1, Math.ceil((px + RO) / HC));
+  const j0 = Math.max(0, ((py - RO) / HC) | 0), j1 = Math.min(HH - 1, Math.ceil((py + RO) / HC));
+  const bw = i1 - i0 + 1, bh = j1 - j0 + 1;
+  if (bw < 1 || bh < 1) return;
+  if (shoveBuf.length < bw * bh * 2) shoveBuf = new Float32Array(bw * bh * 2);
+  for (let j = j0; j <= j1; j++) {
+    const y = (j + 0.5) * HC;
+    for (let i = i0; i <= i1; i++) {
+      const x = (i + 0.5) * HC, o = (j * HW + i) * 2, b = ((j - j0) * bw + (i - i0)) * 2;
+      shoveBuf[b] = DXY[o]; shoveBuf[b + 1] = DXY[o + 1];
+      const ex = x - px, ey = y - py, d = Math.sqrt(ex * ex + ey * ey), q = d / R;
+      if (q >= 1.45) continue;
+      const rx = d > 0.001 ? ex / d : ux, ry = d > 0.001 ? ey / d : uy, front = rx * ux + ry * uy;
+      if (q < 0.55) continue;                                         // the middle of the groove is scraped bare: those grains were underneath
+      let w = q < 1 ? (q - 0.55) / 0.45 : (1.45 - q) / 0.45;          // the push is strongest at the finger's edge and fades across the rim
+      w *= front < -0.25 ? 0 : front > 0.75 ? 1 : front + 0.25;       // only the leading half pushes; nothing moves behind the finger
+      if (w <= 0) continue;
+      let vx = rx + ux * 0.45, vy = ry + uy * 0.45;                   // outward from the finger, and a little forward
+      const vl = Math.sqrt(vx * vx + vy * vy) || 1, m = step * w / vl;
+      // the grains arriving here came from a little way back along that direction
+      const sx = (x - vx * m) / HC - 0.5, sy = (y - vy * m) / HC - 0.5;
+      let ci = Math.floor(sx), cj = Math.floor(sy);
+      const tx = sx - ci, ty = sy - cj;
+      ci = ci < 0 ? 0 : ci > HW - 2 ? HW - 2 : ci; cj = cj < 0 ? 0 : cj > HH - 2 ? HH - 2 : cj;
+      const a = (cj * HW + ci) * 2, c = a + HW * 2;
+      shoveBuf[b] = (DXY[a] * (1 - tx) + DXY[a + 2] * tx) * (1 - ty) + (DXY[c] * (1 - tx) + DXY[c + 2] * tx) * ty + vx * m + (Math.random() - 0.5) * 2.4 * m;
+      shoveBuf[b + 1] = (DXY[a + 1] * (1 - tx) + DXY[a + 3] * tx) * (1 - ty) + (DXY[c + 1] * (1 - tx) + DXY[c + 3] * tx) * ty + vy * m + (Math.random() - 0.5) * 2.4 * m;   // pushed grains also tumble, as far as they are pushed and no further
+    }
+  }
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    const o = (j * HW + i) * 2, b = ((j - j0) * bw + (i - i0)) * 2;
+    DXY[o] = shoveBuf[b]; DXY[o + 1] = shoveBuf[b + 1];
+  }
+}
+
+/* ---------- loose grains ----------
+   Single grains knocked free: thrown off the leading edge of the finger, or shaken loose where a slope gives way.
+   Each one rolls downhill over the sand, slows with friction, and settles back into the bed. */
+const MAXP = 5000;
+const PX = new Float32Array(MAXP), PY = new Float32Array(MAXP), PVX = new Float32Array(MAXP), PVY = new Float32Array(MAXP);
+const PLIFE = new Float32Array(MAXP), PSH = new Float32Array(MAXP), PBUF = new Float32Array(MAXP * 4);
+let pN = 0;
+function grain(x, y, vx, vy) {
+  if (pN >= MAXP || x < 0 || y < 0 || x >= VW || y >= VH) return;
+  PX[pN] = x; PY[pN] = y; PVX[pN] = vx; PVY[pN] = vy; PLIFE[pN] = 50 + Math.random() * 60; PSH[pN] = 0.72 + Math.random() * 0.33; pN++;
+}
+function spray(ux, uy, step, dug) {
+  const R = fingerR(), n = Math.min(60, Math.round(dug * 0.12 + step * 0.6));
+  for (let k = 0; k < n; k++) {
+    const a = Math.atan2(uy, ux) + (Math.random() - 0.5) * 3.4, c = Math.cos(a), s = Math.sin(a);   // round the leading half
+    const v = step * (0.15 + Math.random() * 0.45) + 0.3;
+    grain(px + c * R * (0.9 + Math.random() * 0.3), py + s * R * (0.9 + Math.random() * 0.3), c * v + ux * step * 0.2, s * v + uy * step * 0.2);
+  }
+}
+function stepGrains() {
+  const ic = 1 / HC;
+  let w = 0;
+  for (let k = 0; k < pN; k++) {
+    let x = PX[k], y = PY[k], vx = PVX[k], vy = PVY[k], life = PLIFE[k] - 1;
+    const i = Math.min(HW - 2, Math.max(1, (x * ic) | 0)), j = Math.min(HH - 2, Math.max(1, (y * ic) | 0)), o = j * HW + i;
+    const gx = (H[o + 1] - H[o - 1]) * ic * 0.5, gy = (H[o + HW] - H[o - HW]) * ic * 0.5;   // slope under the grain
+    vx = (vx - gx * 0.55) * 0.87; vy = (vy - gy * 0.55) * 0.87;                             // gravity pulls it downhill, friction slows it
+    x += vx; y += vy;
+    if (vx * vx + vy * vy < 0.01 && life > 10) life = 10;                                   // it has stopped: sink into the bed
+    if (life <= 0 || x < 0 || y < 0 || x >= VW || y >= VH) continue;
+    PX[w] = x; PY[w] = y; PVX[w] = vx; PVY[w] = vy; PLIFE[w] = life; PSH[w] = PSH[k]; w++;
+  }
+  pN = w;
+}
+
+const PVERT = `#version 300 es
+in vec4 a;                         // x, y in CSS px; shade; opacity
+uniform vec2 uRes, uOff; uniform float uDpr, uSize;
+out vec2 v;
+void main() {
+  vec2 d = a.xy * uDpr - uOff;
+  gl_Position = vec4(d.x / uRes.x * 2. - 1., 1. - d.y / uRes.y * 2., 0., 1.);
+  gl_PointSize = uSize; v = a.zw;
+}`;
+const PFRAG = `#version 300 es
+precision highp float;
+uniform vec3 uSand, uLight;
+in vec2 v; out vec4 o;
+void main() {
+  vec2 c = gl_PointCoord * 2. - 1.; float r2 = dot(c, c);
+  if (r2 > 1.) discard;
+  vec3 n = normalize(vec3(c * .85, sqrt(1. - r2 * .72)));               // a little dome, lit like the bed
+  float dif = max(dot(n, uLight), 0.) / uLight.z;
+  vec3 col = uSand * v.x * (.4 + .6 * dif) * (1. - .3 * smoothstep(.45, 1., r2));
+  o = vec4(col, v.y * (1. - smoothstep(.75, 1., r2)));
+}`;
+let pprog = null, pvao = null, pbuf = null, svao = null;
+const PU = {};
+function initGrainsGL() {
+  const mk = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  pprog = gl.createProgram();
+  gl.attachShader(pprog, mk(gl.VERTEX_SHADER, PVERT)); gl.attachShader(pprog, mk(gl.FRAGMENT_SHADER, PFRAG));
+  gl.bindAttribLocation(pprog, 0, "a");
+  gl.linkProgram(pprog);
+  if (!gl.getProgramParameter(pprog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pprog));
+  ["uRes", "uOff", "uDpr", "uSize", "uSand", "uLight"].forEach(n => { PU[n] = gl.getUniformLocation(pprog, n); });
+  svao = gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+  pvao = gl.createVertexArray(); gl.bindVertexArray(pvao);
+  pbuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pbuf);
+  gl.bufferData(gl.ARRAY_BUFFER, PBUF.byteLength, gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(svao);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+}
+function drawGrains(r, g, b, lx3, ly3, lz3) {
+  if (!pN || !pprog) return;
+  for (let k = 0, o = 0; k < pN; k++) { PBUF[o++] = PX[k]; PBUF[o++] = PY[k]; PBUF[o++] = PSH[k]; PBUF[o++] = PLIFE[k] > 10 ? 1 : PLIFE[k] / 10; }
+  gl.useProgram(pprog); gl.bindVertexArray(pvao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, pbuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, PBUF, 0, pN * 4);
+  gl.uniform2f(PU.uRes, cv.width, cv.height); gl.uniform2f(PU.uOff, OX * DPR, OY * DPR);
+  gl.uniform1f(PU.uDpr, DPR); gl.uniform1f(PU.uSize, Math.max(2, S.grain * DPR * 1.6));
+  gl.uniform3f(PU.uSand, r, g, b); gl.uniform3f(PU.uLight, lx3, ly3, lz3);
+  gl.enable(gl.BLEND); gl.drawArrays(gl.POINTS, 0, pN); gl.disable(gl.BLEND);
+  gl.useProgram(prog); gl.bindVertexArray(svao);
+}
+
+function draw(now) {
+  if (!gl) return;
+  if (heightDirty) {
+    const n2 = HW * HH;
+    for (let i = 0, o = 0; i < n2; i++) { TEXD[o++] = H[i]; TEXD[o++] = shaking ? G2[i] : 0; TEXD[o++] = DXY[2 * i]; TEXD[o++] = DXY[2 * i + 1]; }
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, HW, HH, gl.RGBA, gl.FLOAT, TEXD);
+    heightDirty = false;
+  }
+  const [r, g, b] = hexRGB(S.sand);
+  const ang = S.light * Math.PI / 180, el = S.elevation * Math.PI / 180;
+  gl.uniform1i(U.uH, 0);
+  gl.uniform2f(U.uRes, cv.width, cv.height);
+  gl.uniform2f(U.uOff, OX * DPR, OY * DPR);
+  gl.uniform2f(U.uGrid, HW, HH);
+  gl.uniform1f(U.uCell, HC * DPR);
+  gl.uniform1f(U.uDpr, DPR);
+  gl.uniform3f(U.uSand, r / 255, g / 255, b / 255);
+  gl.uniform3f(U.uLight, Math.cos(ang) * Math.cos(el), Math.sin(ang) * Math.cos(el), Math.sin(el));
+  gl.uniform1f(U.uShadow, S.shadow);
+  gl.uniform1f(U.uSoft, S.softness);
+  gl.uniform1f(U.uGrain, S.grain);
+  gl.uniform1f(U.uVar, S.variation);
+  gl.uniform1f(U.uShim, S.shimmer);
+  gl.uniform1f(U.uTime, (now / 1000) % 600);
+  gl.uniform1f(U.uDepth, S.depth);
+  gl.uniform2f(U.uSeedA, seedA[0], seedA[1]);
+  gl.uniform2f(U.uSeedB, seedB[0], seedB[1]);
+  gl.uniform1f(U.uMix, smoothMix);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  drawGrains(r / 255, g / 255, b / 255, Math.cos(ang) * Math.cos(el), Math.sin(ang) * Math.cos(el), Math.sin(el));
+}
+
+function frame(now) {
+  updateCur();
+  analyse();
+  const was = shaking;
+  shaking = buildField();
+  if (smoothT > 0) { const lv = stepSmooth(); if (lv > 0.01) { addShake(lv, shaking); shaking = true; } heightDirty = dirty = true; }
+  if (shaking) { flow(); settleN = 40; heightDirty = dirty = true; }
+  else if (was) { TF.fill(1); heightDirty = dirty = true; }       // the floor went still: slopes hold again
+  if (ptrDown && plough()) { settleN = 40; heightDirty = dirty = true; }
+  if (settleN > 0) {
+    settleN--;
+    const moved = settle();
+    if (moved > 0.5) { if (settleN < 5) settleN = 5; heightDirty = dirty = true; }
+  }
+  if (pN) { stepGrains(); dirty = true; }
+  if (dirty) { dirty = false; draw(now); }
+  requestAnimationFrame(frame);
+}
+
+/* ---------- panel ---------- */
+const panel = document.getElementById("panel"), panelBody = document.getElementById("panelBody");
+const hint = document.getElementById("hint"), fileInput = document.getElementById("fileInput");
+const controls = {};
+const RESET_SVG = '<svg viewBox="0 0 10 10" fill="none" stroke="#5c5c61" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.2A3.4 3.4 0 1 1 1.6 5.6"/><path d="M1.6 1.4v2h2"/></svg>';
+const CHEV_SVG = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>';
+
+function makeReset() {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "reset"; b.dataset.tip = "Reset"; b.setAttribute("aria-label", "Reset"); b.innerHTML = RESET_SVG;
+  return b;
+}
+function applyEffect(f) {
+  save();
+  record(f.key);
+  dirty = true;
+  if (f.effect === "audio") applyAudio();
+  else if (f.effect === "smooth") smooth();
+}
+
+/* Scrub pill: drag sideways to change, click to type, arrows to nudge, Shift for fine (drag) or coarse (arrows). */
+function makeScrub(f) {
+  const dec = (String(f.step).split(".")[1] || "").length;
+  const clamp = v => Math.min(f.max, Math.max(f.min, v));
+  const snap = v => Number((Math.round(clamp(v) / f.step) * f.step).toFixed(dec));
+  const fmt = v => String(Number(v.toFixed(dec)));
+  const wrap = document.createElement("div"); wrap.className = "num";
+  const dots = "<i></i>".repeat(9);
+  const track = document.createElement("span"); track.className = "track";
+  track.innerHTML = `<span class="dots">${dots}</span><span class="fill"><span class="dots">${dots}</span></span><span class="handle"></span>`;
+  const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = f.label;
+  const val = document.createElement("span"); val.className = "val";
+  const input = document.createElement("input");
+  input.type = "text"; input.inputMode = "decimal"; input.size = 1; input.autocomplete = "off"; input.spellcheck = false;
+  input.setAttribute("aria-label", f.label);
+  val.appendChild(input);
+  const unit = document.createElement("span"); unit.className = "unit"; unit.textContent = f.unit || "";
+  const rst = makeReset();
+  wrap.append(track, lbl, val, unit, rst);
+
+  const PAD = 12;
+  let dragging = false, moved = false, downX = 0, lastX = 0, raw = 0, pid = null;
+  const setPos = v => {
+    const w = wrap.clientWidth || 270;
+    wrap.style.setProperty("--p", (PAD + (clamp(v) - f.min) / (f.max - f.min) * (w - 2 * PAD)).toFixed(1) + "px");
+    wrap.style.setProperty("--pw", (w - 2 * PAD) + "px");
+  };
+  const render = () => {
+    const s = fmt(S[f.key]); input.value = s; val.dataset.v = s;
+    rst.style.visibility = S[f.key] === DEFAULTS[f.key] ? "hidden" : "visible";
+    if (!dragging) setPos(S[f.key]);
+  };
+  const commit = v => { if (v === S[f.key]) return; S[f.key] = v; render(); applyEffect(f); };
+
+  wrap.addEventListener("pointerdown", e => {
+    if (e.button !== 0 || e.target.closest(".reset") || wrap.classList.contains("editing")) return;
+    e.preventDefault();
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+    dragging = true; moved = false; downX = lastX = e.clientX; raw = S[f.key]; pid = e.pointerId;
+    try { wrap.setPointerCapture(pid); } catch (err) {}
+  });
+  wrap.addEventListener("pointermove", e => {
+    if (!dragging || e.pointerId !== pid) return;
+    if (!moved) {
+      if (Math.abs(e.clientX - downX) < 3) return;
+      moved = true; wrap.classList.add("dragging"); document.documentElement.classList.add("scrubbing");
+    }
+    const perPx = (f.max - f.min) / Math.max(40, wrap.clientWidth - 2 * PAD);
+    raw += (e.clientX - lastX) * perPx * (e.shiftKey ? 0.1 : 1);
+    lastX = e.clientX;
+    raw = Math.min(f.max + (f.max - f.min), Math.max(f.min - (f.max - f.min), raw));
+    setPos(raw);
+    commit(snap(raw));
+  });
+  const end = e => {
+    if (!dragging || (e && e.pointerId !== pid)) return;
+    dragging = false;
+    wrap.classList.remove("dragging"); document.documentElement.classList.remove("scrubbing");
+    setPos(S[f.key]);
+    if (!moved && e && e.type === "pointerup") { input.focus(); input.select(); }
+  };
+  wrap.addEventListener("mousedown", e => { if (!wrap.classList.contains("editing") && !e.target.closest(".reset")) e.preventDefault(); });
+  wrap.addEventListener("pointerup", end);
+  wrap.addEventListener("pointercancel", end);
+  wrap.addEventListener("lostpointercapture", end);
+
+  input.addEventListener("focus", () => { wrap.classList.add("editing"); input.select(); });
+  input.addEventListener("input", () => { val.dataset.v = input.value; });
+  const apply = () => {
+    const m = String(input.value).replace(",", ".").match(/-?\d*\.?\d+/);
+    if (m) commit(snap(parseFloat(m[0])));
+    render();
+  };
+  input.addEventListener("blur", () => { wrap.classList.remove("editing"); apply(); });
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { apply(); input.blur(); }
+    else if (e.key === "Escape") { render(); input.blur(); }
+    else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault();
+      commit(snap(S[f.key] + (e.key === "ArrowUp" ? 1 : -1) * f.step * (e.shiftKey ? 10 : 1)));
+      input.select();
+    }
+  });
+  rst.addEventListener("click", () => commit(DEFAULTS[f.key]));
+  if (window.ResizeObserver) new ResizeObserver(() => { if (!dragging) setPos(S[f.key]); }).observe(wrap);
+  controls[f.key] = { set: render };
+  render();
+  return wrap;
+}
+
+function makeColor(f) {
+  const wrap = document.createElement("div"); wrap.className = "col";
+  const lbl = document.createElement("span"); lbl.textContent = f.label;
+  const input = document.createElement("input"); input.type = "color"; input.setAttribute("aria-label", f.label);
+  const code = document.createElement("code");
+  const rst = makeReset();
+  wrap.append(lbl, input, code, rst);
+  const render = () => {
+    input.value = S[f.key]; code.textContent = S[f.key].toUpperCase();
+    rst.style.visibility = S[f.key] === DEFAULTS[f.key] ? "hidden" : "visible";
+  };
+  input.addEventListener("input", () => { S[f.key] = input.value; render(); applyEffect(f); });
+  rst.addEventListener("click", () => { S[f.key] = DEFAULTS[f.key]; render(); applyEffect(f); });
+  controls[f.key] = { set: render };
+  render();
+  return wrap;
+}
+
+let segBtns = {}, playBtn, statusEl;
+const conditional = [];            // [element, source it belongs to]
+function makeSource() {
+  const frag = document.createDocumentFragment();
+  const seg = document.createElement("div"); seg.className = "seg";
+  [["file", "File"], ["mic", "Mic"], ["tone", "Tone"]].forEach(([k, label]) => {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = label;
+    b.addEventListener("click", () => setSource(k));
+    segBtns[k] = b; seg.appendChild(b);
+  });
+  const row = document.createElement("div"); row.className = "buttons";
+  playBtn = document.createElement("button"); playBtn.type = "button"; playBtn.className = "primary";
+  playBtn.addEventListener("click", () => (playing ? stop() : start()));
+  const fileBtn = document.createElement("button"); fileBtn.type = "button"; fileBtn.className = "secondary"; fileBtn.textContent = "Choose file";
+  fileBtn.addEventListener("click", () => fileInput.click());
+  conditional.push([fileBtn, "file"]);
+  row.append(playBtn, fileBtn);
+  statusEl = document.createElement("div"); statusEl.className = "note";
+  frag.append(seg, row, statusEl);
+  return frag;
+}
+
+function updateUI() {
+  for (const k in segBtns) segBtns[k].classList.toggle("on", S.source === k);
+  conditional.forEach(([el, src]) => { el.hidden = S.source !== src; });
+  if (!playBtn) return;
+  playBtn.textContent = playing ? (S.source === "file" ? "Pause" : "Stop") : (S.source === "mic" ? "Listen" : "Play");
+  statusEl.textContent =
+    S.source === "file" ? (fileName || "No file yet. Drop one anywhere on the page.") :
+    S.source === "mic" ? (micError || (playing ? "Listening to the microphone." : "Uses your microphone. Nothing is recorded.")) :
+    (playing ? "Playing a steady tone." : "A steady test tone. Drag Tone to sweep it.");
+}
+
+function buildPanel() {
+  FIELDS.forEach(sec => {
+    const cat = document.createElement("section"); cat.className = "cat";
+    if (UI.closed[sec.title]) cat.classList.add("closed");
+    const head = document.createElement("button"); head.type = "button"; head.className = "cat-head";
+    head.innerHTML = `<span>${sec.title}</span>${CHEV_SVG}`;
+    head.addEventListener("click", () => { UI.closed[sec.title] = cat.classList.toggle("closed"); saveUI(); });
+    const body = document.createElement("div"); body.className = "cat-body";
+    const grid = document.createElement("div"); grid.className = "grid";
+    sec.items.forEach(f => {
+      if (f.type === "source") { grid.appendChild(makeSource()); return; }
+      const el = f.type === "color" ? makeColor(f) : makeScrub(f);
+      if (f.show) conditional.push([el, f.show]);
+      grid.appendChild(el);
+    });
+    body.appendChild(grid); cat.append(head, body); panelBody.appendChild(cat);
+  });
+  const row = document.createElement("div"); row.className = "buttons end";
+  const sc = document.createElement("button"); sc.type = "button"; sc.className = "secondary"; sc.textContent = "Smooth sand";
+  sc.addEventListener("click", shakeSmooth);
+  const ra = document.createElement("button"); ra.type = "button"; ra.className = "secondary"; ra.textContent = "Reset all";
+  ra.addEventListener("click", () => {
+    const src = S.source;
+    S = { ...DEFAULTS, source: src };
+    save(); smooth(); applyAudio();
+    for (const k in controls) controls[k].set();
+    updateUI();
+    record("*", true);
+  });
+  row.append(sc, ra); panelBody.appendChild(row);
+}
+
+function togglePanel(hide) {
+  UI.hidden = hide === undefined ? !panel.classList.contains("collapsed") : hide;
+  panel.classList.toggle("collapsed", UI.hidden);
+  saveUI();
+}
+document.getElementById("hideBtn").addEventListener("click", () => togglePanel(true));
+document.getElementById("showTab").addEventListener("click", () => togglePanel(false));
+
+/* ---------- keys, files ---------- */
+window.addEventListener("contextmenu", e => e.preventDefault());   // no right-click menu anywhere on the page
+window.addEventListener("keydown", e => {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA") && t.type !== "color") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "h" || e.key === "H") togglePanel();
+  else if (e.code === "Space") { e.preventDefault(); if (t && t.blur && t.tagName === "BUTTON") t.blur(); playing ? stop() : start(); }
+});
+fileInput.addEventListener("change", () => { loadFile(fileInput.files[0]); fileInput.value = ""; });
+window.addEventListener("dragover", e => { e.preventDefault(); document.body.classList.add("dropping"); });
+window.addEventListener("dragleave", e => { if (!e.relatedTarget) document.body.classList.remove("dropping"); });
+window.addEventListener("drop", e => {
+  e.preventDefault(); document.body.classList.remove("dropping");
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f && (f.type.startsWith("audio/") || f.type.startsWith("video/") || !f.type)) loadFile(f);
+});
+window.addEventListener("resize", () => { boxW = boxH = 0; resize(); });
+
+/* ---------- undo / redo: snapshots of the settings. Rapid changes to one field (a drag, typing) collapse into one step.
+   The sound source is left out: undo changes how the sand behaves, never what is playing. ---------- */
+const hist = { stack: [], i: -1, lastKey: null, lastT: 0 };
+const undoBtn = document.getElementById("undoBtn"), redoBtn = document.getElementById("redoBtn");
+function updateHistButtons() {
+  undoBtn.setAttribute("aria-disabled", String(hist.i <= 0));
+  redoBtn.setAttribute("aria-disabled", String(hist.i >= hist.stack.length - 1));
+}
+function record(key, force) {
+  const now = Date.now(), snap = JSON.stringify({ ...S, source: undefined });
+  if (hist.i >= 0 && hist.stack[hist.i] === snap) return;                       // nothing actually changed
+  if (!force && hist.i > 0 && key === hist.lastKey && now - hist.lastT < 600) {
+    hist.stack[hist.i] = snap;                                                  // same gesture: update the current step
+  } else {
+    hist.stack.length = hist.i + 1;                                             // a new change drops the redo branch
+    hist.stack.push(snap); hist.i++;
+    if (hist.stack.length > 100) { hist.stack.shift(); hist.i--; }
+  }
+  hist.lastKey = key; hist.lastT = now;
+  updateHistButtons();
+}
+function goHist(d) {
+  const j = hist.i + d;
+  if (j < 0 || j >= hist.stack.length) return;
+  const prev = S;
+  hist.i = j; hist.lastKey = null;
+  S = { ...DEFAULTS, ...JSON.parse(hist.stack[j]), source: prev.source };
+  for (const k in controls) controls[k].set();
+  save(); applyAudio();
+  if (prev.depth !== S.depth) smooth();
+  dirty = true;
+  updateHistButtons();
+}
+undoBtn.addEventListener("click", () => goHist(-1));
+redoBtn.addEventListener("click", () => goHist(1));
+window.addEventListener("keydown", e => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k !== "z" && k !== "y") return;
+  const t = document.activeElement, tag = t && t.tagName;
+  if (tag === "TEXTAREA" || tag === "SELECT" || (tag === "INPUT" && t.type === "text")) return;   // keep native text undo while typing
+  e.preventDefault();
+  goHist(k === "y" || e.shiftKey ? 1 : -1);
+});
+
+/* ---------- tooltip: any element with data-tip="Label" (and optionally data-key="Ctrl+Z") gets a dark pill with the
+   label and one keycap per key. It shows after a short delay on hover or at once on keyboard focus, below the
+   element (above if there is no room). ---------- */
+const tipEl = document.createElement("div");
+tipEl.id = "tip"; tipEl.setAttribute("role", "tooltip");
+document.body.appendChild(tipEl);
+let tipTarget = null, tipTimer = 0;
+function hideTip() { clearTimeout(tipTimer); tipTarget = null; tipEl.classList.remove("show"); }
+function showTip(el) {
+  tipEl.textContent = "";
+  const label = document.createElement("span");
+  label.textContent = el.dataset.tip;
+  tipEl.appendChild(label);
+  const keys = (el.dataset.key || "").split("+").filter(Boolean);
+  if (keys.length) {
+    const wrap = document.createElement("span");
+    wrap.className = "keys";
+    for (const k of keys) { const kc = document.createElement("kbd"); kc.textContent = k; wrap.appendChild(kc); }
+    tipEl.appendChild(wrap);
+  }
+  const r = el.getBoundingClientRect(), t = tipEl.getBoundingClientRect(), gap = 2;
+  let y = r.bottom + gap;
+  if (y + t.height > innerHeight - 4) y = r.top - gap - t.height;               // no room below: flip above
+  const x = Math.max(4, Math.min(innerWidth - t.width - 4, r.left + r.width / 2 - t.width / 2));
+  tipEl.style.left = x + "px"; tipEl.style.top = y + "px";
+  tipEl.classList.add("show");
+}
+function tipEnter(e, delay) {
+  const el = e.target.closest && e.target.closest("[data-tip]");
+  if (!el || el === tipTarget) return;
+  hideTip();
+  tipTarget = el;
+  if (!delay) showTip(el);
+  else tipTimer = setTimeout(() => { if (document.contains(el)) showTip(el); else hideTip(); }, delay);
+}
+document.addEventListener("mouseover", e => tipEnter(e, 100));
+document.addEventListener("focusin", e => { if (e.target.matches && e.target.matches(":focus-visible")) tipEnter(e, 0); });
+document.addEventListener("mouseout", e => { if (tipTarget && !tipTarget.contains(e.relatedTarget)) hideTip(); });
+document.addEventListener("focusout", hideTip);
+document.addEventListener("pointerdown", hideTip, true);
+document.addEventListener("keydown", hideTip, true);
+document.addEventListener("scroll", hideTip, true);
+
+/* ---------- go ---------- */
+try { initGL(); if (gl) initGrainsGL(); } catch (e) { console.error(e); }
+if (!gl || !prog) hint.textContent = "This needs WebGL 2, which this browser did not provide.";
+resize();
+buildPanel();
+record("init", true);                // the baseline for undo
+if (UI.hidden) panel.classList.add("collapsed");
+updateUI();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
